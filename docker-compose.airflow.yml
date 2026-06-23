@@ -1,0 +1,109 @@
+version: "3.8"
+
+# ── Shared environment for all Airflow services ──────────────────────────────
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3-python3.10
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__LOGGING__LOGGING_LEVEL: WARNING
+    # ── PySpark path env-vars (consumed by the DAG BashOperators) ──────────
+    AML_RAW_PATH: /opt/airflow/data/raw/transactions
+    AML_SCORED_PATH: /opt/airflow/data/processed/txn_scored
+    AML_CUST_RISK_PATH: /opt/airflow/data/processed/customer_risk
+    AML_ALERT_OUT_PATH: /opt/airflow/output/alert_queue
+    AML_CUST_RISK_OUT_PATH: /opt/airflow/output/customer_risk_profiles
+    AML_ALERT_THRESHOLD: "25"
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./scripts:/opt/airflow/scripts
+    - ./logs:/opt/airflow/logs
+    - ./data:/opt/airflow/data
+    - ./output:/opt/airflow/output
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - aml-net
+
+services:
+  # ── PostgreSQL metadata database ──────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - aml-net
+
+  # ── One-shot DB init + first-time admin user creation ────────────────────
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        pip install --no-cache-dir pyspark==3.5.1 && \
+        airflow db upgrade && \
+        airflow users create \
+          --username admin \
+          --firstname Ridhan \
+          --lastname Parvendhan \
+          --role Admin \
+          --email ridhanparvendhan@gmail.com \
+          --password admin
+    restart: "no"
+
+  # ── Airflow webserver (UI at http://localhost:8080) ───────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ── Airflow scheduler ─────────────────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-db-volume:
+
+networks:
+  aml-net:
+    driver: bridge
