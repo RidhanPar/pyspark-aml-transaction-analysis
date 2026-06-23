@@ -125,6 +125,136 @@ Path defaults (`/opt/airflow/data/…`) can be overridden with environment varia
 
 ---
 
+## BigQuery Analytics Layer
+
+The `bigquery/` folder adds a Google BigQuery tier that mirrors every PySpark typology rule in standard SQL, letting you query the pipeline's raw transaction data directly in the cloud at no cost using the BigQuery sandbox.
+
+### File Reference
+
+| File | Purpose |
+|---|---|
+| `bigquery/schema.json` | BigQuery table schema for the `transactions` table |
+| `bigquery/load_to_bq.py` | Uploads Parquet output to BigQuery via the Python SDK |
+| `bigquery/typology_structuring.sql` | Structuring / smurfing detection |
+| `bigquery/typology_velocity.sql` | High-velocity layering detection |
+| `bigquery/typology_high_risk_country.sql` | High-risk country routing detection |
+| `bigquery/typology_amount_spike.sql` | Behavioural amount spike (≥ 3× 7-day average) |
+| `bigquery/typology_rapid_succession.sql` | Rapid succession (< 5 minutes between transactions) |
+| `bigquery/risk_score_final.sql` | Weighted composite risk score combining all five flags |
+
+### 1. Create a Free BigQuery Sandbox Project
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) and sign in with a Google account.
+2. Click **Select a project → New Project**, give it a name (e.g. `aml-analytics`), and click **Create**.
+3. Navigate to **BigQuery** in the left menu. The sandbox tier is enabled automatically — no billing required for the first 10 GB of storage and 1 TB of queries per month.
+4. Install the Google Cloud CLI if you haven't already:
+   ```bash
+   # macOS / Linux
+   curl https://sdk.cloud.google.com | bash
+   exec -l $SHELL
+   gcloud init
+   ```
+
+### 2. Authenticate and Install Dependencies
+
+```bash
+# Authenticate for Application Default Credentials (used by the SDK)
+gcloud auth application-default login
+
+# Install Python dependencies
+pip install google-cloud-bigquery pyarrow pandas db-dtypes
+```
+
+### 3. Load the Transaction Data
+
+Run the PySpark pipeline first to generate the Parquet output:
+
+```bash
+spark-submit scripts/ingest_transactions.py
+```
+
+Then load the raw transactions into BigQuery:
+
+```bash
+python bigquery/load_to_bq.py \
+    --project  YOUR_PROJECT_ID \
+    --dataset  aml_transactions \
+    --parquet  data/raw/transactions \
+    --create-dataset
+```
+
+The `--create-dataset` flag creates the `aml_transactions` dataset on first run. You can also load the alert queue and customer risk profiles produced by the full pipeline:
+
+```bash
+python bigquery/load_to_bq.py \
+    --project YOUR_PROJECT_ID --dataset aml_transactions \
+    --parquet output/alert_queue --table alert_queue
+
+python bigquery/load_to_bq.py \
+    --project YOUR_PROJECT_ID --dataset aml_transactions \
+    --parquet output/customer_risk_profiles --table customer_risk_profiles
+```
+
+### 4. Run the Detection Queries
+
+Replace `YOUR_PROJECT` and `YOUR_DATASET` in each SQL file with your actual project ID and dataset name, then run them in the BigQuery console or via the CLI.
+
+**BigQuery Console**
+
+1. Open the [BigQuery console](https://console.cloud.google.com/bigquery).
+2. Open any `.sql` file from the `bigquery/` folder.
+3. Replace the placeholders and click **Run**.
+
+**BigQuery CLI**
+
+```bash
+# Substitute placeholders inline with sed, then execute
+sed 's/YOUR_PROJECT/my-project/g; s/YOUR_DATASET/aml_transactions/g' \
+    bigquery/risk_score_final.sql \
+  | bq query --use_legacy_sql=false --project_id=my-project
+
+# Or run individual typology queries
+sed 's/YOUR_PROJECT/my-project/g; s/YOUR_DATASET/aml_transactions/g' \
+    bigquery/typology_structuring.sql \
+  | bq query --use_legacy_sql=false --project_id=my-project
+```
+
+### 5. Query Summary
+
+| SQL File | Key Window Logic | Returns |
+|---|---|---|
+| `typology_structuring.sql` | RANGE 7-day count on sub-threshold amounts | Transactions 9k–9,999 with ≥ 3 in 7 days |
+| `typology_velocity.sql` | RANGE 7-day count + volume | Transactions where customer has ≥ 5 txns / ≥ 20k in 7 days |
+| `typology_high_risk_country.sql` | Simple IN-list filter | Transactions touching CY, MT, PAN, BVI, or SCH |
+| `typology_amount_spike.sql` | RANGE 7-day AVG ratio | Transactions ≥ 3× the customer's 7-day average |
+| `typology_rapid_succession.sql` | LAG + TIMESTAMP_DIFF | Transactions < 5 min after the customer's previous one |
+| `risk_score_final.sql` | All of the above in one query | Every transaction with score, tier, and all five flags |
+
+---
+
+## Running Scripts Directly (without Airflow)
+
+```bash
+pip install pyspark==3.5.1
+
+spark-submit scripts/ingest_transactions.py
+spark-submit scripts/run_typology_detection.py
+spark-submit scripts/export_to_parquet.py
+```
+
+Path defaults (`/opt/airflow/data/…`) can be overridden with environment variables:
+
+| Variable | Default |
+|---|---|
+| `AML_RAW_PATH` | `/opt/airflow/data/raw/transactions` |
+| `AML_SCORED_PATH` | `/opt/airflow/data/processed/txn_scored` |
+| `AML_CUST_RISK_PATH` | `/opt/airflow/data/processed/customer_risk` |
+| `AML_ALERT_OUT_PATH` | `/opt/airflow/output/alert_queue` |
+| `AML_CUST_RISK_OUT_PATH` | `/opt/airflow/output/customer_risk_profiles` |
+| `AML_ALERT_THRESHOLD` | `25` |
+
+---
+
 ## Tech Stack
 
 | Component | Version |
@@ -133,5 +263,7 @@ Path defaults (`/opt/airflow/data/…`) can be overridden with environment varia
 | PySpark | 3.5.1 |
 | Apache Airflow | 2.9.3 |
 | PostgreSQL | 15 (Airflow metadata DB) |
+| Google BigQuery | Standard SQL (sandbox) |
+| google-cloud-bigquery | 3.x |
 
 > **Disclaimer:** all transaction data is entirely synthetic and generated for demonstration purposes only.

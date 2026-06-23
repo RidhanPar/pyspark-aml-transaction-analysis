@@ -1,0 +1,68 @@
+[
+  {
+    "name": "transaction_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Unique transaction identifier (TXN00000000)"
+  },
+  {
+    "name": "customer_id",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Customer who initiated the transaction (CUST00000)"
+  },
+  {
+    "name": "originator_account",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Sending account reference (ACC000000)"
+  },
+  {
+    "name": "beneficiary_account",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "Receiving account reference (ACC000000)"
+  },
+  {
+    "name": "amount",
+    "type": "FLOAT64",
+    "mode": "REQUIRED",
+    "description": "Transaction amount in the denominated currency"
+  },
+  {
+    "name": "currency",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "ISO 4217 currency code (EUR, USD, GBP, SEK, CHF)"
+  },
+  {
+    "name": "channel",
+    "type": "STRING",
+    "mode": "REQUIRED",
+    "description": "Payment channel (SEPA, SWIFT, FASTER_PAYMENTS, INTERNAL, CARD)"
+  },
+  {
+    "name": "originator_country",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "ISO 3166-1 alpha-2 country code of the sending party"
+  },
+  {
+    "name": "beneficiary_country",
+    "type": "STRING",
+    "mode": "NULLABLE",
+    "description": "ISO 3166-1 alpha-2 country code of the receiving party"
+  },
+  {
+    "name": "timestamp",
+    "type": "TIMESTAMP",
+    "mode": "REQUIRED",
+    "description": "UTC timestamp of the transaction"
+  },
+  {
+    "name": "is_flagged_source",
+    "type": "BOOL",
+    "mode": "REQUIRED",
+    "description": "Synthetic ground-truth label (true = intentionally suspicious)"
+  }
+]
