@@ -1,0 +1,30 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+name: evaluate_credit_risk_model
+version: "1"
+display_name: Evaluate Credit Risk XGBoost Model
+description: >
+  Loads the trained XGBoost model, re-evaluates on the held-out test set using
+  the same stratified 80/20 split as the training step, logs all metrics to the
+  Azure ML experiment via MLflow auto-tracking, and writes a JSON evaluation report.
+type: command
+
+inputs:
+  model_dir:
+    type: uri_folder
+    description: Trained XGBoost model files from the train component
+  scored_parquet:
+    type: uri_folder
+    description: PySpark-generated txn_scored Parquet directory
+
+outputs:
+  eval_report:
+    type: uri_file
+    description: JSON evaluation report with all test-set metrics
+
+code: .
+environment: azureml:credit-risk-env:1
+command: >-
+  python evaluate_script.py
+    --model_dir ${{inputs.model_dir}}
+    --scored_parquet ${{inputs.scored_parquet}}
+    --eval_report ${{outputs.eval_report}}

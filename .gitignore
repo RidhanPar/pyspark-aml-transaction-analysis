@@ -36,6 +36,10 @@ spark-warehouse/
 application_default_credentials.json
 *-credentials.json
 
+# Azure ML workspace config (contains subscription ID — never commit)
+azure-ml/config.json
+azure-ml-outputs/
+
 # macOS / Windows
 .DS_Store
 Thumbs.db

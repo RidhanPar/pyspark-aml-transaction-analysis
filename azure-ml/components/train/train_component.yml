@@ -1,0 +1,39 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+name: train_credit_risk_model
+version: "1"
+display_name: Train Credit Risk XGBoost Model
+description: >
+  XGBoost binary classifier on AML-scored transaction features with stratified
+  5-fold cross-validation. Produces a trained model, evaluation metrics JSON,
+  SHAP beeswarm plot, and LIME explanations for the top-3 highest-risk predictions.
+  Metrics are logged to the Azure ML experiment via MLflow auto-tracking.
+type: command
+
+inputs:
+  scored_parquet:
+    type: uri_folder
+    description: PySpark-generated txn_scored Parquet directory
+
+outputs:
+  model_dir:
+    type: uri_folder
+    description: Trained XGBoost model files (xgboost_model.json + features.json)
+  metrics_json:
+    type: uri_file
+    description: JSON file with all CV and test evaluation metrics
+  shap_plot:
+    type: uri_file
+    description: SHAP beeswarm summary PNG
+  lime_html:
+    type: uri_file
+    description: LIME explanations HTML for the top-3 highest-risk predictions
+
+code: .
+environment: azureml:credit-risk-env:1
+command: >-
+  python train_script.py
+    --scored_parquet_path ${{inputs.scored_parquet}}
+    --model_dir ${{outputs.model_dir}}
+    --metrics_json ${{outputs.metrics_json}}
+    --shap_plot ${{outputs.shap_plot}}
+    --lime_html ${{outputs.lime_html}}
