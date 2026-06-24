@@ -546,6 +546,68 @@ dbt test
 
 ---
 
+## Redis NoSQL Caching Layer
+
+Redis 7 acts as a NoSQL reference data cache and pipeline observability store. This implements the **cache-aside pattern**: reference data is loaded into Redis on pipeline startup with a 1-hour TTL, Spark workers read from a broadcast variable populated from Redis rather than a hardcoded IN-list, and dynamic country risk classification updates require no code changes.
+
+| Data | Redis structure | Key | TTL |
+|---|---|---|---|
+| High-risk country codes | SET | `aml:high_risk_countries` | 1 hour |
+| Pipeline run metadata | HASH | `aml:pipeline_runs:{run_id}` | 24 hours |
+
+### Architecture
+
+```
+Driver
+  │
+  ├─▶ Redis SET  populate_country_risk_cache()
+  │             SADD aml:high_risk_countries {CY, MT, PAN, BVI, SCH}
+  │             EXPIRE 3600s
+  │
+  ├─▶ Redis SET  get_high_risk_countries()
+  │             SMEMBERS → Python set
+  │
+  ├─▶ spark.sparkContext.broadcast(country_set)
+  │             Serialised once to all workers — no Redis calls on executors
+  │
+  ├─▶ PySpark UDF  is_high_risk(country)
+  │             Reads from broadcast variable, not Redis
+  │
+  │   [... full typology detection pipeline ...]
+  │
+  └─▶ Redis HASH  store_pipeline_run(run_id, record_count, alert_count)
+                HSET aml:pipeline_runs:{run_id}
+                EXPIRE 86400s
+```
+
+**Graceful degradation:** if Redis is unavailable, `run_typology_detection.py` falls back to the hardcoded `HIGH_RISK_COUNTRIES` set and logs a warning. Redis is a performance enhancement, not a hard dependency.
+
+### Start Redis
+
+```bash
+pip install redis>=5.0.0
+
+docker compose -f docker-compose.redis.yml up -d
+
+# Verify:
+docker compose -f docker-compose.redis.yml exec redis redis-cli ping
+# Expected: PONG
+```
+
+### Inspect Cached Data
+
+```bash
+# View cached country codes
+docker compose -f docker-compose.redis.yml exec redis \
+  redis-cli SMEMBERS aml:high_risk_countries
+
+# View a pipeline run's metadata (replace <run_id> with e.g. run_20240615_143022)
+docker compose -f docker-compose.redis.yml exec redis \
+  redis-cli HGETALL "aml:pipeline_runs:<run_id>"
+```
+
+---
+
 ## Running Scripts Directly (without Airflow)
 
 ```bash

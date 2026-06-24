@@ -2,11 +2,22 @@
 Step 2 – Typology Detection: feature engineering, five AML rule flags, weighted risk scoring.
 Input:  data/raw/transactions/
 Output: data/processed/txn_scored/  and  data/processed/customer_risk/
+
+Redis integration (cache-aside pattern, graceful degradation):
+  - Country risk codes are loaded into a Redis SET at pipeline startup (1-hour TTL).
+  - The set is broadcast to Spark workers via SparkContext.broadcast(); workers
+    read from the broadcast variable — no Redis calls inside the Spark execution graph.
+  - Pipeline run metadata is stored as a Redis HASH at completion (24-hour TTL).
+  - If Redis is unavailable the pipeline falls back to the hardcoded
+    HIGH_RISK_COUNTRIES set and continues without error.
 """
 import os
+import sys
+from datetime import datetime
 
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as F
+from pyspark.sql.types import BooleanType
 
 RAW_PATH       = os.environ.get("AML_RAW_PATH",       "/opt/airflow/data/raw/transactions")
 SCORED_PATH    = os.environ.get("AML_SCORED_PATH",    "/opt/airflow/data/processed/txn_scored")
@@ -22,8 +33,35 @@ WEIGHTS = {
     "flag_rapid_succession":  10,
 }
 
+# Optional Redis import — pipeline runs normally without Redis if the package
+# is not installed or the server is unreachable.
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from redis_cache import RedisCache
+    _REDIS_IMPORTABLE = True
+except ImportError:
+    _REDIS_IMPORTABLE = False
+
 
 def main():
+    # ── Redis: cache-aside country risk lookup ─────────────────────────────────
+    redis_ok = False
+    cache = None
+    if _REDIS_IMPORTABLE:
+        try:
+            cache = RedisCache()
+            redis_ok = cache.health_check()
+        except Exception:
+            pass
+
+    if redis_ok:
+        cache.populate_country_risk_cache(list(HIGH_RISK_COUNTRIES))
+        country_set = cache.get_high_risk_countries() or HIGH_RISK_COUNTRIES
+    else:
+        print("[WARN] Redis unavailable — falling back to hardcoded HIGH_RISK_COUNTRIES")
+        country_set = HIGH_RISK_COUNTRIES
+
+    # ── Spark session ──────────────────────────────────────────────────────────
     spark = (
         SparkSession.builder
         .appName("AML_Typology_Detection")
@@ -32,10 +70,17 @@ def main():
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    txn_df = spark.read.parquet(RAW_PATH)
-    print(f"Loaded {txn_df.count():,} transactions from {RAW_PATH}")
+    # Broadcast country set to workers — no Redis calls on executor nodes.
+    bc_countries = spark.sparkContext.broadcast(country_set)
+    is_high_risk = F.udf(
+        lambda c: bool(c and c in bc_countries.value), BooleanType()
+    )
 
-    # ── Feature engineering ────────────────────────────────────────────────
+    txn_df = spark.read.parquet(RAW_PATH)
+    total_count = txn_df.count()
+    print(f"Loaded {total_count:,} transactions from {RAW_PATH}")
+
+    # ── Feature engineering ────────────────────────────────────────────────────
     txn_enriched = (
         txn_df
         .withColumn("date",        F.to_date("timestamp"))
@@ -45,8 +90,7 @@ def main():
         .withColumn("is_offhours", (F.col("hour") < 6) | (F.col("hour") >= 22))
         .withColumn(
             "involves_high_risk_country",
-            F.col("originator_country").isin(list(HIGH_RISK_COUNTRIES))
-            | F.col("beneficiary_country").isin(list(HIGH_RISK_COUNTRIES)),
+            is_high_risk(F.col("originator_country")) | is_high_risk(F.col("beneficiary_country")),
         )
     )
 
@@ -82,7 +126,7 @@ def main():
         .drop("prev_ts")
     )
 
-    # ── Typology flags ─────────────────────────────────────────────────────
+    # ── Typology flags ─────────────────────────────────────────────────────────
     txn_flagged = (
         txn_features
         .withColumn(
@@ -114,7 +158,7 @@ def main():
         )
     )
 
-    # ── Risk scoring ───────────────────────────────────────────────────────
+    # ── Risk scoring ───────────────────────────────────────────────────────────
     risk_score_expr = sum(F.col(f).cast("int") * w for f, w in WEIGHTS.items())
 
     txn_scored = (
@@ -131,7 +175,7 @@ def main():
 
     txn_scored.groupBy("risk_tier").count().orderBy(F.desc("count")).show()
 
-    # ── Customer-level aggregation ─────────────────────────────────────────
+    # ── Customer-level aggregation ─────────────────────────────────────────────
     customer_risk = (
         txn_scored
         .groupBy("customer_id")
@@ -166,6 +210,12 @@ def main():
 
     customer_risk.coalesce(1).write.mode("overwrite").parquet(CUST_RISK_PATH)
     print(f"Customer risk profiles written to {CUST_RISK_PATH}")
+
+    # ── Redis: store pipeline run metadata for observability ───────────────────
+    if redis_ok and cache:
+        alert_count = txn_scored.filter(F.col("risk_score") >= 25).count()
+        run_id = f"run_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        cache.store_pipeline_run(run_id, total_count, alert_count)
 
     spark.stop()
 
