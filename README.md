@@ -474,6 +474,78 @@ sed 's/YOUR_PROJECT/my-project/g; s/YOUR_DATASET/aml_transactions/g' \
 
 ---
 
+## dbt Analytics Layer
+
+A dbt Core project (`dbt_aml/`) sits on top of the BigQuery dataset loaded by the Python pipeline. Python handles ingestion and PySpark feature engineering; dbt handles analytics engineering and data modelling — applying software engineering practices (version control, testing, documentation) to SQL transformations so that the BigQuery analytics tables are reproducible, tested, and documented independently of the ingestion pipeline.
+
+### Model DAG
+
+```
+Raw BigQuery table  (aml_transactions.transactions — loaded by bigquery/load_to_bq.py)
+        │
+        ▼
+stg_transactions            [view]      — column renames + type casts
+        │
+        ▼
+int_risk_flagged            [ephemeral] — 5 AML typology flags + rolling window features
+        │
+        ├──▶ mart_aml_alert_queue       [table, partitioned by day]
+        │       Rows where risk_score >= 25; same weighted formula as Python pipeline
+        │
+        └──▶ mart_customer_risk_profile [table]
+                Per-customer aggregation: total txns, peak risk score, 4-tier classification
+```
+
+### Materialisation Strategy
+
+| Layer | Pattern | Materialisation | Reason |
+|---|---|---|---|
+| `staging/` | 1-to-1 source map | view | Zero storage cost; always reflects latest raw data |
+| `intermediate/` | Reusable logic | ephemeral | Inlined as CTE — no duplicate table in BigQuery |
+| `marts/` | Business-facing tables | table | Stable, queryable by analysts and dashboards |
+
+### Setup and Run
+
+```bash
+pip install dbt-bigquery
+
+cd dbt_aml
+
+# Authenticate (picks up ADC used by bigquery/load_to_bq.py)
+gcloud auth application-default login
+
+# Set your GCP project
+export GCP_PROJECT_ID=your-project-id
+
+# Copy the profiles template (profiles.yml is gitignored)
+cp profiles.yml.example profiles.yml
+
+# Verify connection to BigQuery
+dbt debug
+
+# Download any packages (none required yet)
+dbt deps
+
+# Build all models
+dbt run
+
+# Run all tests (schema tests + singular assert_alert_queue_min_score)
+dbt test
+```
+
+### Tests
+
+| Test | Model | Type |
+|---|---|---|
+| `not_null`, `unique` on `transaction_id` | `stg_transactions` | Generic |
+| `not_null` on `customer_id`, `amount` | `stg_transactions` | Generic |
+| `not_null` on `transaction_id`, `risk_score` | `mart_aml_alert_queue` | Generic |
+| `accepted_values` on `risk_tier` (`HIGH`, `MEDIUM`) | `mart_aml_alert_queue` | Generic |
+| `not_null`, `unique` on `customer_id` | `mart_customer_risk_profile` | Generic |
+| `assert_alert_queue_min_score` — all rows score ≥ 25 | `mart_aml_alert_queue` | Singular |
+
+---
+
 ## Running Scripts Directly (without Airflow)
 
 ```bash

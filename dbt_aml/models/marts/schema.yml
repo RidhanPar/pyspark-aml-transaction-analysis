@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: mart_aml_alert_queue
+    description: >
+      Alert queue mart: all transactions with a composite risk_score >= 25.
+      Partitioned by DATE(transaction_timestamp) for cost-efficient time-range queries.
+      Weights match scripts/run_typology_detection.py exactly.
+    columns:
+      - name: transaction_id
+        description: "Unique transaction identifier"
+        tests:
+          - not_null
+      - name: risk_score
+        description: "Weighted composite risk score (min 25 in this mart)"
+        tests:
+          - not_null
+      - name: risk_tier
+        description: "Categorical risk tier derived from risk_score"
+        tests:
+          - accepted_values:
+              values: ['HIGH', 'MEDIUM']
+
+  - name: mart_customer_risk_profile
+    description: >
+      Customer risk profile mart: one row per customer summarising their
+      full transaction history, aggregate flag counts, peak risk score,
+      and a four-tier customer risk classification.
+    columns:
+      - name: customer_id
+        description: "Customer identifier (primary key)"
+        tests:
+          - not_null
+          - unique
+      - name: max_risk_score
+        description: "Highest risk_score observed across all customer transactions"
+        tests:
+          - not_null
+      - name: risk_tier
+        description: "Customer-level risk classification"
+        tests:
+          - accepted_values:
+              values: ['Critical', 'High', 'Medium', 'Low']

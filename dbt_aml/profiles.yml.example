@@ -1,0 +1,12 @@
+# Copy this file to profiles.yml and set GCP_PROJECT_ID before running dbt.
+# Production uses service account via keyfile env var GOOGLE_APPLICATION_CREDENTIALS
+aml_bigquery:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT_ID') }}"
+      dataset: aml_dbt_dev
+      threads: 4
+      timeout_seconds: 300

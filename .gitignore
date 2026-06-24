@@ -40,6 +40,12 @@ application_default_credentials.json
 azure-ml/config.json
 azure-ml-outputs/
 
+# dbt (profiles.yml is machine-specific; target/ and dbt_packages/ are generated)
+dbt_aml/profiles.yml
+dbt_aml/target/
+dbt_aml/dbt_packages/
+dbt_aml/logs/
+
 # macOS / Windows
 .DS_Store
 Thumbs.db
