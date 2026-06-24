@@ -221,6 +221,72 @@ client.transition_model_version_stage(
 
 ---
 
+## Azure ML Pipeline Integration
+
+`scripts/azure_ml_pipeline.py` defines an Azure ML SDK v2 pipeline that wraps the existing XGBoost training component, enabling submission to a cloud compute cluster with full MLflow experiment tracking inside Azure ML.
+
+### Architecture
+
+```
+scored_parquet (uri_folder)
+        │
+        ▼
+┌──────────────────┐
+│  1. data_prep    │  Load Parquet → cast booleans → stratified 80/20 split
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  2. train_model  (XGBoost Credit Risk Classifier component)  │
+│     • Stratified 5-fold CV   • SHAP beeswarm                │
+│     • LIME top-3              • MLflow: credit_risk_azure_pipeline │
+└────────┬─────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────┐
+│  3. register_model                           │
+│     mlflow.register_model()                  │
+│     → credit_risk_xgboost_azure / Staging    │
+└──────────────────────────────────────────────┘
+```
+
+### Run Locally (pipeline authoring mode)
+
+```bash
+pip install azure-ai-ml>=1.14.0 azure-identity>=1.16.0
+
+python scripts/azure_ml_pipeline.py
+# Prints the full pipeline YAML definition to stdout — no Azure connection required.
+```
+
+### Submit to Azure ML
+
+```bash
+export AZURE_SUBSCRIPTION_ID=<your-subscription-id>
+export AZURE_RESOURCE_GROUP=<your-resource-group>
+export AZURE_WORKSPACE_NAME=<your-workspace-name>
+
+# Set LOCAL_DEV_MODE = False in scripts/azure_ml_pipeline.py, then:
+python scripts/azure_ml_pipeline.py
+# Authenticates with DefaultAzureCredential (az login / managed identity)
+# Submits the pipeline and prints the Azure ML Studio run URL
+```
+
+### Environment Variables
+
+| Variable | Required for | Description |
+|---|---|---|
+| `AZURE_SUBSCRIPTION_ID` | Live submission | Azure subscription GUID |
+| `AZURE_RESOURCE_GROUP` | Live submission | Resource group containing the AML workspace |
+| `AZURE_WORKSPACE_NAME` | Live submission | Azure ML workspace name |
+| `AZURE_CLIENT_ID` | Service-principal auth | Optional — picked up automatically by `DefaultAzureCredential` |
+| `AZURE_CLIENT_SECRET` | Service-principal auth | Optional — picked up automatically by `DefaultAzureCredential` |
+| `AZURE_TENANT_ID` | Service-principal auth | Optional — picked up automatically by `DefaultAzureCredential` |
+
+> Pipeline is fully defined and ready to submit; Azure ML workspace provisioning is omitted to avoid subscription cost during portfolio development — same pattern as the Terraform IaC in the AI Ops project.
+
+---
+
 ## BigQuery Analytics Layer
 
 The `bigquery/` folder adds a Google BigQuery tier that mirrors every PySpark typology rule in standard SQL, letting you query the pipeline's raw transaction data directly in the cloud at no cost using the BigQuery sandbox.
