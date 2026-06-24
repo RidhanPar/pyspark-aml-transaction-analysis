@@ -6,6 +6,17 @@ End-to-end Anti-Money Laundering post-transaction analysis pipeline built with P
 
 ---
 
+## Live Dashboard
+
+An interactive Streamlit dashboard is deployed at:
+
+**[https://ridhanpar-aml-transaction-monitor.streamlit.app](https://ridhanpar-aml-transaction-monitor.streamlit.app)**
+
+Generates 2,000 synthetic transactions in-browser — no login or data files required.  
+Source: [`dashboard/app.py`](dashboard/app.py)
+
+---
+
 ## Pipeline Overview
 
 | Step | Script | Description |
@@ -13,6 +24,7 @@ End-to-end Anti-Money Laundering post-transaction analysis pipeline built with P
 | 1 | `scripts/ingest_transactions.py` | Generate 10 k synthetic transactions, run DQ checks, write raw Parquet |
 | 2 | `scripts/run_typology_detection.py` | Window-function features, 5 AML rule flags, weighted risk scoring, customer aggregation |
 | 3 | `scripts/export_to_parquet.py` | Filter alert queue (score ≥ 25), export final Parquet outputs |
+| 4 | `scripts/train_credit_risk_model.py` | XGBoost binary classifier, SHAP + LIME explainability, MLflow + Azure ML |
 
 ### AML Typologies Detected
 
