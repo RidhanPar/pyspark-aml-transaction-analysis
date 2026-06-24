@@ -114,6 +114,86 @@ docker compose -f docker-compose.airflow.yml down -v
 
 ---
 
+## Real-Time Streaming Mode
+
+A Kafka + PySpark Structured Streaming layer runs **alongside** the batch pipeline (no changes to existing scripts or the Airflow DAG). A producer generates synthetic transaction events; a Structured Streaming consumer applies the same five typology rules and writes scored alerts to Parquet every 10 seconds.
+
+### Architecture
+
+```
+streaming/producer.py
+        │
+        │  JSON events (0.5 s interval)
+        ▼
+Kafka topic "aml_transactions"   ←  kafka-ui  http://localhost:8090
+        │
+        │  micro-batch (10 s trigger)
+        ▼
+streaming/structured_streaming_consumer.py
+  • Feature engineering  (rolling_7d_amount / count / avg, seconds_since_last_txn, …)
+  • Typology flags        (structuring, high_velocity, high_risk_country, amount_spike, rapid_succession)
+  • Weighted risk score + tier  (same weights as batch pipeline)
+        │
+        ▼
+output/streaming_alerts/   (Parquet, append)
+```
+
+### Start the Streaming Pipeline
+
+**Step 1 — Start the Kafka stack**
+
+```bash
+docker compose -f docker-compose.kafka.yml up -d
+```
+
+Wait ~20 s for the health checks to pass, then verify at **http://localhost:8090**.
+
+**Step 2 — Start the producer** (terminal 1)
+
+```bash
+pip install confluent-kafka
+python streaming/producer.py
+# Logs one line per message:
+# Sent txn_id=TXN00000001 amount=1234.56 to aml_transactions
+```
+
+Set `PRODUCER_INTERVAL` (seconds, default `0.5`) to change the emit rate.
+
+**Step 3 — Start the Structured Streaming consumer** (terminal 2)
+
+```bash
+pip install pyspark==3.5.1
+spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 \
+  streaming/structured_streaming_consumer.py
+# Logs a summary every 10 s:
+# Batch 0: processed 20 records, 3 alerts (score >= 25)
+```
+
+**Step 4 — Inspect topics**
+
+Open **http://localhost:8090** to browse the `aml_transactions` topic, inspect message payloads, and monitor consumer-group lag.
+
+**Stop**
+
+```bash
+# Ctrl+C in each terminal, then:
+docker compose -f docker-compose.kafka.yml down
+```
+
+### Batch vs Streaming Comparison
+
+| Aspect | Batch (Airflow) | Streaming (Kafka) |
+|---|---|---|
+| Trigger | Scheduled DAG run | Continuous micro-batch |
+| Latency | Minutes | Seconds |
+| Input | Parquet from `data/raw/transactions/` | Kafka topic `aml_transactions` |
+| Output | `output/alert_queue/` Parquet | `output/streaming_alerts/` Parquet |
+| Orchestration | Apache Airflow 2.9 | PySpark Structured Streaming |
+| Typology logic | `scripts/run_typology_detection.py` | `streaming/structured_streaming_consumer.py` (same logic) |
+
+---
+
 ## Running Scripts Directly (without Airflow)
 
 ```bash

@@ -1,0 +1,2 @@
+confluent-kafka>=2.3.0
+pyspark==3.5.1
