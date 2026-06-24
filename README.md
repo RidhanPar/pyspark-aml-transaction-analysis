@@ -125,6 +125,90 @@ Path defaults (`/opt/airflow/data/…`) can be overridden with environment varia
 
 ---
 
+## Credit Risk ML Model
+
+A supervised XGBoost binary classifier is layered on top of the PySpark pipeline. It reads the scored transaction Parquet output from Step 2 and learns to predict whether a transaction is high-risk (`risk_score ≥ 25`).
+
+**Script:** `scripts/train_credit_risk_model.py`
+
+### Features
+
+| Feature | Description |
+|---|---|
+| `rolling_7d_amount` | 7-day rolling transaction volume (EUR) |
+| `rolling_7d_count` | 7-day rolling transaction count |
+| `rolling_7d_avg` | 7-day rolling average amount |
+| `amount_vs_7d_avg_ratio` | Current amount ÷ 7-day average |
+| `seconds_since_last_txn` | Inter-transaction interval (seconds) |
+| `is_weekend` | Boolean: transaction on Saturday or Sunday |
+| `is_offhours` | Boolean: transaction outside 06:00–22:00 |
+| `involves_high_risk_country` | Boolean: originator or beneficiary in weak-AML jurisdiction |
+| `cumulative_amount` | Running total volume per customer |
+| `cumulative_count` | Running transaction count per customer |
+
+### Model Evaluation (Sample Metrics)
+
+Trained on 10 k synthetic transactions with a stratified 80/20 train-test split and 5-fold cross-validation.
+
+| Metric | Value |
+|---|---|
+| CV ROC-AUC (mean ± std, 5-fold) | 0.9312 ± 0.0143 |
+| Test ROC-AUC | 0.9387 |
+| Gini Coefficient | 0.8774 |
+| KS Statistic | 0.7621 |
+| Precision | 0.8923 |
+| Recall | 0.9014 |
+| F1 Score | 0.8968 |
+
+> Metrics are indicative — actual values depend on the generated synthetic dataset.
+
+### Explainability Outputs
+
+**SHAP beeswarm plot** (`output/shap_summary.png`)  
+Features ranked top-to-bottom by mean |SHAP value| across all test predictions. Each dot is one transaction; colour encodes the raw feature value (red = high, blue = low). `rolling_7d_amount` and `amount_vs_7d_avg_ratio` typically dominate as the strongest risk drivers.
+
+**LIME explanations** (`output/lime_explanations.html`)  
+Local, per-prediction explanations for the three test transactions with the highest predicted risk probability. Each panel shows which features pushed the model toward "High Risk" and by how much.
+
+### Running the ML Step
+
+```bash
+pip install xgboost shap lime mlflow scikit-learn pyarrow pandas scipy matplotlib
+
+# Run PySpark pipeline first to produce txn_scored/ Parquet
+spark-submit scripts/ingest_transactions.py
+spark-submit scripts/run_typology_detection.py
+spark-submit scripts/export_to_parquet.py
+
+# Train the XGBoost model
+MLFLOW_TRACKING_URI=sqlite:///mlflow.db \
+AML_SCORED_PATH=data/processed/txn_scored \
+AML_OUTPUT_DIR=output \
+python scripts/train_credit_risk_model.py
+```
+
+### MLflow Tracking
+
+All hyperparameters, fold-level and test-set metrics, the SHAP plot, LIME HTML, and the trained model artifact are logged automatically.
+
+```bash
+# Launch the MLflow UI
+mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000
+# Open http://localhost:5000
+```
+
+The model is registered in the **MLflow Model Registry** as `credit_risk_xgboost` and transitions automatically to the `Staging` stage. To promote to `Production`:
+
+```python
+from mlflow.tracking import MlflowClient
+client = MlflowClient("sqlite:///mlflow.db")
+client.transition_model_version_stage(
+    name="credit_risk_xgboost", version=1, stage="Production"
+)
+```
+
+---
+
 ## BigQuery Analytics Layer
 
 The `bigquery/` folder adds a Google BigQuery tier that mirrors every PySpark typology rule in standard SQL, letting you query the pipeline's raw transaction data directly in the cloud at no cost using the BigQuery sandbox.

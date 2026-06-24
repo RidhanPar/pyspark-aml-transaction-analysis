@@ -1,10 +1,13 @@
 """
-AML Pipeline DAG – three sequential tasks that run the PySpark AML pipeline.
+AML Pipeline DAG – four sequential tasks that run the PySpark AML pipeline
+and then train the XGBoost credit risk model.
 
 Task order:
   ingest_transactions  →  run_typology_detection  →  export_to_parquet
+    →  train_credit_risk_model
 
-Each task submits the corresponding script via spark-submit inside the container.
+Each PySpark task submits the corresponding script via spark-submit inside the
+container. The ML task runs the training script directly with python.
 Environment variables control I/O paths so the scripts remain reusable outside Airflow.
 """
 from datetime import datetime, timedelta
@@ -82,4 +85,21 @@ with DAG(
         ),
     )
 
-    ingest_transactions >> run_typology_detection >> export_to_parquet
+    train_credit_risk_model = BashOperator(
+        task_id="train_credit_risk_model",
+        bash_command=(
+            f"env {_PATH_ENV} "
+            "AML_OUTPUT_DIR=/opt/airflow/output "
+            "MLFLOW_TRACKING_URI=sqlite:////opt/airflow/mlflow.db "
+            f"python {SCRIPTS_DIR}/train_credit_risk_model.py"
+        ),
+        doc_md=(
+            "**Credit Risk ML Model** – load scored transactions from "
+            "`data/processed/txn_scored/`, train an XGBoost binary classifier "
+            "with stratified 5-fold CV, generate SHAP beeswarm and LIME "
+            "explanations, and register the model in the MLflow Model Registry "
+            "under the `Staging` stage."
+        ),
+    )
+
+    ingest_transactions >> run_typology_detection >> export_to_parquet >> train_credit_risk_model
